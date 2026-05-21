@@ -1,0 +1,12 @@
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      glob: "*.{ts,js,json,md}"
+      run: bunx prettier --check {staged_files}
+    lint:
+      glob: "src/**/*.ts"
+      run: bunx eslint {staged_files}
+    typecheck:
+      glob: "src/**/*.ts"
+      run: bun run type:check

@@ -1,0 +1,149 @@
+# CI — Test, build, publish to npmjs (every push to main)
+#
+# Push to main: test → build → CalVer version bump → publish to npmjs (public).
+# PRs: test + build only (no publish).
+#
+# CalVer: YYYY.MDD.PATCH (semver-compatible, no zero-padding)
+# Scope: @vibecontrols/* (public on npmjs)
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Format check
+        run: |
+          if jq -e '.scripts["format:check"]' package.json >/dev/null 2>/dev/null; then
+            bun run format:check
+          else
+            echo "Skipping format:check"
+          fi
+
+      - name: Lint
+        run: |
+          if jq -e '.scripts.lint' package.json >/dev/null 2>/dev/null && ( [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] ); then
+            bun run lint
+          else
+            echo "Skipping lint: no lint script or eslint config"
+          fi
+
+      - name: Type check
+        run: |
+          if jq -e '.scripts["type:check"]' package.json >/dev/null 2>/dev/null; then
+            bun run type:check
+          elif jq -e '.scripts.typecheck' package.json >/dev/null 2>/dev/null; then
+            bun run typecheck
+          else
+            echo "Skipping type check"
+          fi
+
+      - name: Test
+        run: |
+          if jq -e '.scripts.test' package.json >/dev/null 2>/dev/null; then
+            bun run test
+          else
+            echo "Skipping test: no test script"
+          fi
+
+      - name: Build
+        run: bun run build
+
+  publish-npmjs:
+    name: Publish to npmjs
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Setup Node (for npm publish + version arithmetic)
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org/"
+          scope: "@vibecontrols"
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Compute next CalVer version
+        id: ver
+        run: |
+          set -euo pipefail
+          PKG=$(jq -r .name package.json)
+          # YYYY.MDD with no leading zero on month/day
+          BASE_DATE=$(date -u +"%Y.%-m%d")
+          # Find highest existing PATCH for today, default to 0.
+          LATEST=$(npm view "$PKG" versions --json 2>/dev/null | jq -r --arg base "$BASE_DATE" '
+            (. // []) | map(select(startswith($base + ".")))
+              | map(split(".") | .[2] | tonumber) | (max // 0)
+          ')
+          NEXT=$((LATEST + 1))
+          VERSION="${BASE_DATE}.${NEXT}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Next version: $VERSION"
+
+      - name: Bump package.json version
+        run: |
+          jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+
+      - name: Build
+        run: bun run build
+
+      - name: Publish to npmjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Create git tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.ver.outputs.version }}"
+          git push origin "${{ steps.ver.outputs.version }}"

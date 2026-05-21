@@ -1,0 +1,14 @@
+src/
+tests/
+.github/
+node_modules/
+coverage/
+*.log
+.bun-version
+bun.lock
+tsconfig.json
+eslint.config.js
+lefthook.yml
+.prettierignore
+.gitignore
+.npmignore

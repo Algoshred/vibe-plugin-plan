@@ -116,11 +116,24 @@ jobs:
           PKG=$(jq -r .name package.json)
           # YYYY.MDD with no leading zero on month/day
           BASE_DATE=$(date -u +"%Y.%-m%d")
-          # Find highest existing PATCH for today, default to 0.
-          LATEST=$(npm view "$PKG" versions --json 2>/dev/null | jq -r --arg base "$BASE_DATE" '
-            (. // []) | map(select(startswith($base + ".")))
-              | map(split(".") | .[2] | tonumber) | (max // 0)
-          ')
+          # Find highest existing PATCH for today, default to 0. `npm view`
+          # may emit:
+          #   • nothing (404 — package not yet published) → treat as []
+          #   • a JSON string (one published version) → wrap in [_]
+          #   • a JSON array (≥2 published versions) → keep
+          # Without this normalization jq's startswith() throws on a
+          # null/string input and the whole publish job exits non-zero.
+          RAW=$(npm view "$PKG" versions --json 2>/dev/null || echo "[]")
+          [ -z "$RAW" ] && RAW="[]"
+          LATEST=$(printf '%s' "$RAW" | jq -r --arg base "$BASE_DATE" '
+            (if type == "array" then .
+              elif type == "string" then [.]
+              else [] end)
+              | map(select(type == "string" and startswith($base + ".")))
+              | map(split(".") | .[2] | tonumber)
+              | (max // 0)
+          ' 2>/dev/null || echo 0)
+          [ -z "$LATEST" ] && LATEST=0
           NEXT=$((LATEST + 1))
           VERSION="${BASE_DATE}.${NEXT}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

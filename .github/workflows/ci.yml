@@ -109,48 +109,24 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      - name: Compute next CalVer version
-        id: ver
-        run: |
-          set -euo pipefail
-          PKG=$(jq -r .name package.json)
-          # YYYY.MDD with no leading zero on month/day
-          BASE_DATE=$(date -u +"%Y.%-m%d")
-          # Find highest existing PATCH for today, default to 0. `npm view`
-          # may emit:
-          #   • nothing (404 — package not yet published) → treat as []
-          #   • a JSON string (one published version) → wrap in [_]
-          #   • a JSON array (≥2 published versions) → keep
-          # Without this normalization jq's startswith() throws on a
-          # null/string input and the whole publish job exits non-zero.
-          RAW=$(npm view "$PKG" versions --json 2>/dev/null || echo "[]")
-          [ -z "$RAW" ] && RAW="[]"
-          LATEST=$(printf '%s' "$RAW" | jq -r --arg base "$BASE_DATE" '
-            (if type == "array" then .
-              elif type == "string" then [.]
-              else [] end)
-              | map(select(type == "string" and startswith($base + ".")))
-              | map(split(".") | .[2] | tonumber)
-              | (max // 0)
-          ' 2>/dev/null || echo 0)
-          [ -z "$LATEST" ] && LATEST=0
-          NEXT=$((LATEST + 1))
-          VERSION="${BASE_DATE}.${NEXT}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Next version: $VERSION"
-
-      - name: Bump package.json version
-        run: |
-          jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp
-          mv package.json.tmp package.json
-
       - name: Build
         run: bun run build
 
       - name: Publish to npmjs
+        # Dead-simple publish: the version is whatever is in package.json.
+        # Bump it manually before merging to main. The publish silently
+        # no-ops if that version is already on the registry.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+        run: |
+          set -euo pipefail
+          PKG=$(jq -r .name package.json)
+          VERSION=$(jq -r .version package.json)
+          if npm view "$PKG@$VERSION" version >/dev/null 2>&1; then
+            echo "::notice::$PKG@$VERSION already on npmjs — skipping publish."
+            exit 0
+          fi
+          npm publish --access public --tag latest
 
       - name: Create git tag
         env:

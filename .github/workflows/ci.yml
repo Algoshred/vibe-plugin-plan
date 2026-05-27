@@ -79,6 +79,26 @@ jobs:
       - name: Build
         run: bun run build
 
+  # Aggregator status required by the `main` branch ruleset ("Branch Push
+  # Protection" → required check "PR Gate"). Without a job reporting a
+  # "PR Gate" check, that required context sits at "Expected — waiting for
+  # status to be reported" forever and blocks every PR.
+  pr-gate:
+    name: PR Gate
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check results
+        run: |
+          result="${{ needs.test.result }}"
+          if [ "$result" = "failure" ] || [ "$result" = "cancelled" ]; then
+            echo "::error::Test & Build $result — PR Gate fails"
+            exit 1
+          fi
+          echo "Test & Build passed — PR Gate green"
+
   publish-npmjs:
     name: Publish to npmjs
     needs: test
@@ -132,7 +152,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Tag the package.json version (matches the publish step above). The
+          # previous `steps.ver.outputs.version` referenced a non-existent step,
+          # so this ran `git tag ""` and failed the job (exit 128).
+          VERSION=$(jq -r .version package.json)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.ver.outputs.version }}"
-          git push origin "${{ steps.ver.outputs.version }}"
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "tag $VERSION already exists — skipping"
+            exit 0
+          fi
+          git tag "$VERSION"
+          git push origin "$VERSION" || true

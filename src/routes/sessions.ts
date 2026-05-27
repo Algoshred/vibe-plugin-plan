@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import { Elysia, t } from "elysia";
 
 import type { HostServices } from "@vibecontrols/plugin-sdk";
@@ -7,12 +9,66 @@ import { SessionStore } from "../lib/session-store.js";
 import { mintSessionId } from "../lib/uuid.js";
 import type {
   PlanErrorBody,
+  PlanMode,
   PlanSession,
   StartSessionRequest,
 } from "../types.js";
 
 function errorBody(error: string, code: PlanErrorBody["code"]): PlanErrorBody {
   return { error, code };
+}
+
+/**
+ * Body accepted by `POST /sessions`. Two shapes land here:
+ *  - the UI / CLI canonical `{ projectId, prompt, mode, ... }`.
+ *  - an AI coding agent's plan hook, forwarding its raw payload. Claude
+ *    Code's ExitPlanMode PreToolUse hook posts
+ *    `{ tool_name, tool_input: { plan }, cwd, session_id }` — no projectId,
+ *    plan text under `tool_input.plan`.
+ */
+interface SessionPostBody {
+  provider?: string;
+  projectId?: string;
+  prompt?: string;
+  mode?: PlanMode;
+  agent?: string;
+  timeoutMs?: number;
+  tool_input?: { plan?: string };
+  tool_name?: string;
+  cwd?: string;
+  session_id?: string;
+}
+
+/**
+ * Map either request shape onto a canonical StartSessionRequest. The agent
+ * hook fires `curl … || true`, so a 422 here would fail *silently* and no
+ * plan would ever reach the UI — hence we normalise rather than reject:
+ * pull the plan from `tool_input.plan`, and synthesise a projectId from the
+ * cwd basename / session id when the hook doesn't supply one.
+ */
+export function normalizeStartRequest(body: SessionPostBody): {
+  provider?: string;
+  startReq: StartSessionRequest;
+} {
+  const prompt = body.prompt ?? body.tool_input?.plan;
+  const projectId =
+    body.projectId ??
+    (body.cwd ? basename(body.cwd) || body.cwd : undefined) ??
+    body.session_id ??
+    "default";
+  const agent =
+    body.agent ??
+    (body.tool_name === "ExitPlanMode" ? "claude-code" : undefined);
+  return {
+    provider: body.provider,
+    startReq: {
+      projectId,
+      prompt,
+      mode: body.mode,
+      agent,
+      timeoutMs: body.timeoutMs,
+    },
+  };
 }
 
 function toLogPayload(err: unknown): Record<string, unknown> {
@@ -69,25 +125,18 @@ export function createSessionRoutes(host: HostServices) {
     .post(
       "/sessions",
       async ({ body, set }) => {
-        const req = body;
-        const provider = dispatcher.resolve(req.provider);
+        const { provider: providerName, startReq } =
+          normalizeStartRequest(body);
+        const provider = dispatcher.resolve(providerName);
         if (!provider) {
           set.status = 503;
           return errorBody(
-            req.provider
-              ? `Plan provider '${req.provider}' not registered`
+            providerName
+              ? `Plan provider '${providerName}' not registered`
               : "No plan provider registered",
-            req.provider ? "PROVIDER_NOT_FOUND" : "PROVIDER_UNAVAILABLE",
+            providerName ? "PROVIDER_NOT_FOUND" : "PROVIDER_UNAVAILABLE",
           );
         }
-
-        const startReq: StartSessionRequest = {
-          projectId: req.projectId,
-          prompt: req.prompt,
-          mode: req.mode,
-          agent: req.agent,
-          timeoutMs: req.timeoutMs,
-        };
         try {
           const fromProvider = await provider.startSession(startReq);
           const session: PlanSession = {
@@ -119,21 +168,33 @@ export function createSessionRoutes(host: HostServices) {
         }
       },
       {
-        body: t.Object({
-          provider: t.Optional(t.String()),
-          projectId: t.String({ minLength: 1 }),
-          prompt: t.Optional(t.String()),
-          mode: t.Optional(
-            t.Union([
-              t.Literal("plan"),
-              t.Literal("review"),
-              t.Literal("annotate"),
-              t.Literal("archive"),
-            ]),
-          ),
-          agent: t.Optional(t.String()),
-          timeoutMs: t.Optional(t.Number()),
-        }),
+        // projectId is Optional (not required): the agent hook shape has no
+        // projectId — it's synthesised in normalizeStartRequest. `additional
+        // Properties` stays open so a hook can forward its full payload
+        // (hook_event_name, transcript_path, …) without tripping validation.
+        body: t.Object(
+          {
+            provider: t.Optional(t.String()),
+            projectId: t.Optional(t.String({ minLength: 1 })),
+            prompt: t.Optional(t.String()),
+            mode: t.Optional(
+              t.Union([
+                t.Literal("plan"),
+                t.Literal("review"),
+                t.Literal("annotate"),
+                t.Literal("archive"),
+              ]),
+            ),
+            agent: t.Optional(t.String()),
+            timeoutMs: t.Optional(t.Number()),
+            // Claude Code ExitPlanMode PreToolUse hook payload.
+            tool_input: t.Optional(t.Object({ plan: t.Optional(t.String()) })),
+            tool_name: t.Optional(t.String()),
+            cwd: t.Optional(t.String()),
+            session_id: t.Optional(t.String()),
+          },
+          { additionalProperties: true },
+        ),
       },
     )
     .delete("/sessions/:id", async ({ params, set }) => {

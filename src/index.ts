@@ -51,7 +51,7 @@ export type {
 } from "./types.js";
 
 const PLUGIN_NAME = "plan";
-const PLUGIN_VERSION = "2026.527.1";
+const PLUGIN_VERSION = "2026.527.2";
 
 export const createPlugin: VibePluginFactory = (
   _ctx: ProfileContext,

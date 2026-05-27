@@ -27,13 +27,30 @@ export class SessionStore {
 
   async save(session: PlanSession): Promise<void> {
     if (!this.host.storage) return;
-    await this.host.storage.set(NAMESPACE, session.id, session);
+    // Serialise to JSON. The SDK's StorageProvider is typed `value: T`, but
+    // the skalex adapter (the agent's default storage) requires string values
+    // and rejects raw objects ("Field 'value' must be of type 'string', got
+    // 'object'"). Stringifying matches the convention used across plugins
+    // (e.g. vibe-plugin-ai) and keeps persistence adapter-agnostic.
+    await this.host.storage.set(NAMESPACE, session.id, JSON.stringify(session));
   }
 
   async get(id: string): Promise<PlanSession | null> {
     if (!this.host.storage) return null;
-    const result = await this.host.storage.get<PlanSession>(NAMESPACE, id);
-    return result ?? null;
+    const raw = await this.host.storage.get<string | PlanSession>(
+      NAMESPACE,
+      id,
+    );
+    if (raw == null) return null;
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw) as PlanSession;
+      } catch {
+        return null;
+      }
+    }
+    // Defensive: an adapter that already deserialises returns the object as-is.
+    return raw;
   }
 
   async list(filter?: ListSessionsFilter): Promise<PlanSession[]> {

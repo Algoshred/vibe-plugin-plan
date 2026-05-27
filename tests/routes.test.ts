@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Elysia } from "elysia";
 
 import { createPlanRoutes } from "../src/routes/index.js";
+import { normalizeStartRequest } from "../src/routes/sessions.js";
 import type {
   PlanProvider,
   PlanProviderCapabilities,
@@ -165,6 +166,30 @@ describe("plan routes", () => {
     });
   });
 
+  it("POST /api/plan/sessions accepts Claude's ExitPlanMode hook shape", async () => {
+    // The hook forwards its raw PreToolUse payload (no projectId; plan under
+    // tool_input.plan). Previously this 422'd and the hook swallowed it.
+    const { status, body } = await jsonRequest(
+      app,
+      "POST",
+      "/api/plan/sessions",
+      {
+        hook_event_name: "PreToolUse",
+        tool_name: "ExitPlanMode",
+        tool_input: { plan: "# Ship it\n- step one" },
+        cwd: "/home/dev/my-project",
+        session_id: "claude-abc123",
+      },
+    );
+    expect(status).toBe(200);
+    // projectId is synthesised from the cwd basename.
+    expect(body).toMatchObject({
+      providerName: "stub",
+      projectId: "my-project",
+      status: "active",
+    });
+  });
+
   it("POST /api/plan/sessions returns 503 when no provider is registered", async () => {
     const bareApp = createPlanRoutes(makeHost(null));
     const { status, body } = await jsonRequest(
@@ -201,5 +226,56 @@ describe("plan routes", () => {
     );
     expect(status).toBe(404);
     expect((body as { code: string }).code).toBe("SESSION_NOT_FOUND");
+  });
+});
+
+describe("normalizeStartRequest", () => {
+  it("passes the canonical UI/CLI shape through unchanged", () => {
+    const { provider, startReq } = normalizeStartRequest({
+      provider: "plannotator",
+      projectId: "p1",
+      prompt: "# Plan",
+      mode: "plan",
+      agent: "cli",
+      timeoutMs: 1000,
+    });
+    expect(provider).toBe("plannotator");
+    expect(startReq).toEqual({
+      projectId: "p1",
+      prompt: "# Plan",
+      mode: "plan",
+      agent: "cli",
+      timeoutMs: 1000,
+    });
+  });
+
+  it("maps Claude's ExitPlanMode hook: tool_input.plan→prompt, cwd→projectId, agent=claude-code", () => {
+    const { startReq } = normalizeStartRequest({
+      tool_name: "ExitPlanMode",
+      tool_input: { plan: "# Ship it" },
+      cwd: "/home/dev/my-project",
+      session_id: "claude-abc",
+    });
+    expect(startReq.prompt).toBe("# Ship it");
+    expect(startReq.projectId).toBe("my-project");
+    expect(startReq.agent).toBe("claude-code");
+    expect(startReq.mode).toBeUndefined(); // → provider defaults to plan
+  });
+
+  it("falls back projectId: cwd basename → session_id → 'default'", () => {
+    expect(normalizeStartRequest({ session_id: "s1" }).startReq.projectId).toBe(
+      "s1",
+    );
+    expect(normalizeStartRequest({}).startReq.projectId).toBe("default");
+    // A root cwd has an empty basename → use the cwd itself.
+    expect(normalizeStartRequest({ cwd: "/" }).startReq.projectId).toBe("/");
+  });
+
+  it("prefers an explicit prompt over tool_input.plan", () => {
+    const { startReq } = normalizeStartRequest({
+      prompt: "explicit",
+      tool_input: { plan: "from-hook" },
+    });
+    expect(startReq.prompt).toBe("explicit");
   });
 });

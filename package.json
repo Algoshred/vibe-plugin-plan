@@ -29,10 +29,9 @@
   ],
   "author": {
     "name": "Vignesh T.V",
-    "email": "vignesh@burdenoff.com",
     "url": "https://github.com/tvvignesh"
   },
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "description": "Plan orchestration meta-plugin for vibecontrols — owns the PlanProvider contract and dispatches to registered providers (plannotator etc.).",
   "dependencies": {
     "@vibecontrols/plugin-sdk": "2026.509.2"

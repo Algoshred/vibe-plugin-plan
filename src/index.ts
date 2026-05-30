@@ -78,6 +78,12 @@ export const createPlugin: VibePluginFactory = (
     },
     cliCommand: "plan",
     apiPrefix: "/api/plan",
+    metaProviders: [
+      {
+        packageName: "@vibecontrols/vibe-plugin-plan-plannotator",
+        pluginName: "plan-plannotator",
+      },
+    ],
 
     async onServerStart(app: unknown, host: HostServices) {
       await lifecycle.onServerStart(app, host);

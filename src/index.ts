@@ -29,6 +29,7 @@ import {
 } from "@vibecontrols/plugin-sdk";
 
 import { createPlanRoutes } from "./routes/index.js";
+import { createPlanBridgeRoute } from "./routes/plan-bridge.js";
 import { registerPlanCommands } from "./commands.js";
 import {
   startAbandonmentWatchdog,
@@ -51,7 +52,14 @@ export type {
 } from "./types.js";
 
 const PLUGIN_NAME = "plan";
-const PLUGIN_VERSION = "2026.527.2";
+const PLUGIN_VERSION = "2026.531.1";
+
+// Meta plugin extends the SDK contract with `publicPaths` (declared by the
+// runtime, not yet on the SDK type) so the agent's edge-auth middleware
+// treats `/plan/<sid>/*` as plugin-owned and lets it through unauthenticated
+// for the iframe-bridge route to do its own auth (single-use HMAC ticket +
+// scoped UI cookie + provider-key injection).
+type PlanMetaVibePlugin = VibePlugin & { publicPaths?: string[] };
 
 export const createPlugin: VibePluginFactory = (
   _ctx: ProfileContext,
@@ -65,7 +73,7 @@ export const createPlugin: VibePluginFactory = (
     },
   });
 
-  return {
+  const plugin: PlanMetaVibePlugin = {
     name: PLUGIN_NAME,
     version: PLUGIN_VERSION,
     description:
@@ -78,6 +86,11 @@ export const createPlugin: VibePluginFactory = (
     },
     cliCommand: "plan",
     apiPrefix: "/api/plan",
+    // Meta owns the generic `/plan/<sid>/*` iframe-bridge route. The agent's
+    // edge auth must let it through unauthenticated — the bridge then
+    // verifies a single-use HMAC ticket + scoped cookie itself before
+    // forwarding to the active provider with the agent API key injected.
+    publicPaths: ["/plan/"],
     metaProviders: [
       {
         packageName: "@vibecontrols/vibe-plugin-plan-plannotator",
@@ -89,8 +102,14 @@ export const createPlugin: VibePluginFactory = (
       await lifecycle.onServerStart(app, host);
       const elysiaApp = app as { use: (plugin: unknown) => unknown };
       elysiaApp.use(createPlanRoutes(host));
+      // Mount the generic iframe-bridge BEFORE the active provider's own
+      // routes register. Provider-agnostic: dispatches into the registered
+      // PlanProvider via its `proxyRequest` method (see types.ts).
+      elysiaApp.use(createPlanBridgeRoute(host));
       startAbandonmentWatchdog(host);
-      process.stdout.write("  Plugin 'plan' registered routes: /api/plan\n");
+      process.stdout.write(
+        "  Plugin 'plan' registered routes: /api/plan, /plan (bridge)\n",
+      );
     },
 
     async onServerStop(host: HostServices) {
@@ -103,6 +122,7 @@ export const createPlugin: VibePluginFactory = (
       registerPlanCommands(programArg as Command);
     },
   };
+  return plugin;
 };
 
 export default createPlugin;

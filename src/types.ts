@@ -126,6 +126,20 @@ export interface PlanProvider {
   submitFeedback(id: string, feedback: PlanFeedback): Promise<PlanSession>;
   endSession(id: string): Promise<void>;
   streamSession?(id: string): AsyncIterable<PlanContent>;
+  /**
+   * Reverse-proxy a UI request to the provider's per-session backend.
+   * Receives the full Request (already auth-bridged by the meta plugin's
+   * iframe-bridge route — `x-agent-api-key` injected, `?vt=` stripped,
+   * cookie planted) and returns whatever the upstream emits.
+   *
+   * Optional — providers that don't surface a UI (e.g. headless review
+   * pipelines) leave this off, and the meta plugin's bridge returns
+   * 503 for any `/plan/<sid>/*` hit. This keeps the agent itself
+   * provider-agnostic: the agent's `/plan/*` route is a blind
+   * `pluginRoutesApp.handle(request)` delegator, and meta routes
+   * everything through `getProvider("plan").proxyRequest`.
+   */
+  proxyRequest?(req: Request): Promise<Response>;
 }
 
 export type PlanErrorCode =

@@ -21,12 +21,14 @@ import type { Command } from "commander";
 
 import {
   createLifecycleHooks,
+  provisionMetaProviders,
   TelemetryEmitter,
   type HostServices,
   type ProfileContext,
   type VibePlugin,
   type VibePluginFactory,
 } from "@vibecontrols/plugin-sdk";
+import type { MetaProviderRef } from "@vibecontrols/plugin-sdk/contract";
 
 import { createPlanRoutes } from "./routes/index.js";
 import { createPlanBridgeRoute } from "./routes/plan-bridge.js";
@@ -53,6 +55,17 @@ export type {
 
 const PLUGIN_NAME = "plan";
 const PLUGIN_VERSION = "2026.531.1";
+
+/**
+ * Provider packages this meta routes to + per-platform defaults. The meta —
+ * not the agent — installs/loads/prereqs/elects them via `provisionProviders`.
+ */
+const PLAN_PROVIDERS: ReadonlyArray<MetaProviderRef> = [
+  {
+    packageName: "@vibecontrols/vibe-plugin-plan-plannotator",
+    pluginName: "plan-plannotator",
+  },
+];
 
 // Meta plugin extends the SDK contract with `publicPaths` (declared by the
 // runtime, not yet on the SDK type) so the agent's edge-auth middleware
@@ -91,12 +104,9 @@ export const createPlugin: VibePluginFactory = (
     // verifies a single-use HMAC ticket + scoped cookie itself before
     // forwarding to the active provider with the agent API key injected.
     publicPaths: ["/plan/"],
-    metaProviders: [
-      {
-        packageName: "@vibecontrols/vibe-plugin-plan-plannotator",
-        pluginName: "plan-plannotator",
-      },
-    ],
+    metaProviders: PLAN_PROVIDERS,
+    provisionProviders: (hostServices: HostServices) =>
+      provisionMetaProviders(hostServices, PLAN_PROVIDERS),
 
     async onServerStart(app: unknown, host: HostServices) {
       await lifecycle.onServerStart(app, host);

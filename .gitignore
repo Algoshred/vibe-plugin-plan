@@ -7,3 +7,6 @@ coverage/
 .env.local
 .vscode/
 .idea/
+junit.xml
+sanity.log
+.eslintcache

@@ -1,86 +1,75 @@
-# Release — manual workflow_dispatch to publish a specific CalVer version
+# vendored from algoshred/ci-workflows@c3f35eb994c2b554eb1a3c61b7ee12e2a687521c
+# source: templates/plugin/release.yml. Do not edit: regenerate with scripts/vendor.ts in algoshred/ci-workflows.
+# Release caller for a public vibe plugin (plan sections 8.3 and 10.7).
 #
-# Triggered manually (or by pushing a CalVer git tag). The normal `ci.yml`
-# workflow auto-publishes on every push to main; this workflow exists for
-# operator-controlled releases (e.g. backporting a fix to a specific tag).
-
+# Every push to main publishes the next free CalVer (YYYY.MDD.PATCH) of the
+# package to npmjs under the `latest` dist-tag, as the plugin fleet always has.
+# A pushed CalVer tag releases exactly that version, and a manual dispatch
+# releases the given version (or the next free one when left empty).
+#
+# node-lib-release.yml runs a frozen install, `boff sanity --force` (format
+# check, lint, bun check, build with `tsc --emitDeclarationOnly`, tests), stamps
+# the version, rebuilds, checks the tarball and publishes with npm provenance
+# (these repositories are public). common-release-finalize.yml then waits until
+# npm actually serves the version, verifies the tarball digest, tags the
+# released commit and creates the GitHub Release.
+#
+# Public repositories cannot read the org secret NPM_TOKEN, so the publish token
+# is the repository secret NPMJS_VIBECONTROLS_TOKEN (NPM_TOKEN stays as a
+# fallback for repositories that were given one).
+#
+# Vendored with scripts/vendor.ts together with plugin/pr-check.yml.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags:
-      - "[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*"
+      - '[0-9][0-9][0-9][0-9].[0-9]*.[0-9]*'
+    # Documentation-only pushes do not publish a new version. This workflow
+    # never emits PR Gate, so the filter cannot wedge a required check.
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
   workflow_dispatch:
     inputs:
       version:
-        description: "CalVer version (e.g., 2026.521.1)."
-        required: true
+        description: CalVer version to release (YYYY.MDD.PATCH). Empty = next free patch for today.
+        required: false
         type: string
+        default: ''
+
+permissions:
+  contents: read
 
 concurrency:
-  group: release
+  group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release to npmjs
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+  publish:
+    uses: ./.github/workflows/ci-workflows--node-lib-release.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      # Every plugin publishes as @vibecontrols/<repository name>; the release
+      # fails if package.json says otherwise.
+      package-name: '@vibecontrols/${{ github.event.repository.name }}'
+      version: ${{ inputs.version || '' }}
+      verify-command: ./node_modules/.bin/boff sanity --force
+      provenance: true
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPMJS_VIBECONTROLS_TOKEN || secrets.NPM_TOKEN }}
+
+  finalize:
+    needs: publish
+    uses: ./.github/workflows/ci-workflows--common-release-finalize.yml
     permissions:
       contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: .bun-version
-
-      - name: Setup Node
-        uses: actions/setup-node@v5
-        with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org/"
-          scope: "@vibecontrols"
-
-      - name: Resolve version
-        id: ver
-        run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Lint & type check
-        run: bun run lint && bun run type:check
-
-      - name: Test
-        run: bun run test
-
-      - name: Build
-        run: bun run build
-
-      - name: Set package.json version
-        run: |
-          jq --arg v "${{ steps.ver.outputs.version }}" '.version=$v' package.json > package.json.tmp
-          mv package.json.tmp package.json
-
-      - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
-
-      - name: GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.ver.outputs.version }}
-          name: ${{ steps.ver.outputs.version }}
-          generate_release_notes: true
+    with:
+      registry: npm
+      package-name: ${{ needs.publish.outputs.package-name }}
+      version: ${{ needs.publish.outputs.version }}

@@ -13,12 +13,7 @@
 export type PlanMode = "plan" | "review" | "annotate" | "archive";
 
 export type PlanSessionStatus =
-  | "pending"
-  | "active"
-  | "approved"
-  | "denied"
-  | "abandoned"
-  | "ended";
+  "pending" | "active" | "approved" | "denied" | "abandoned" | "ended";
 
 export interface PlanProviderCapabilities {
   /** Modes this provider can produce sessions for. */

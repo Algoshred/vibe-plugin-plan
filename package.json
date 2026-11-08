@@ -58,10 +58,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/algoshred/vibe-plugin-plan.git"
+    "url": "git+https://github.com/Algoshred/vibe-plugin-plan.git"
   },
   "bugs": {
-    "url": "https://github.com/algoshred/vibe-plugin-plan/issues"
+    "url": "https://github.com/Algoshred/vibe-plugin-plan/issues"
   },
   "homepage": "https://vibecontrols.com",
   "publishConfig": {
